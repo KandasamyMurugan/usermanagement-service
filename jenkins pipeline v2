@@ -1,0 +1,119 @@
+pipeline {
+    agent any
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        IMAGE_NAME = 'usermanagementservice'
+        ECR_ACCOUNT_ID = '072950892534'  // <-- Replace with your AWS Account ID
+        ECR_REPO = "${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_NAME}"
+        TF_VAR_image_tag = "${env.BUILD_NUMBER}"
+        TF_VAR_ecr_repo_url = "${ECR_REPO}"
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/feature-kanda']],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/KandasamyMurugan/usermanagement-service.git',
+                        credentialsId: 'b2cac38d-0784-46b2-8c06-49ab546103f8'
+                    ]]
+                ])
+            }
+        }
+        stage('Build App') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def imageTag = "${env.BUILD_NUMBER}"
+                    def fullImageName = "${env.IMAGE_NAME}:${imageTag}"
+                    def ecrImage = "${env.ECR_REPO}:${imageTag}"
+                    // Build Docker image
+                    sh "docker build -t ${fullImageName} ."
+                    // Tag for ECR
+                    sh "docker tag ${fullImageName} ${ecrImage}"
+                }
+            }
+        }
+        stage('Push to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                         sh 'aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 072950892534.dkr.ecr.us-east-1.amazonaws.com'
+                         def imageTag = "${env.BUILD_NUMBER}"
+                         def ecrImage = "${env.ECR_REPO}:${imageTag}"
+                         sh "docker push ${ecrImage}"
+                         sh "docker tag ${ecrImage} ${env.ECR_REPO}:latest"
+                         sh "docker push ${env.ECR_REPO}:latest"
+                    }
+                }
+            }
+        }
+        stage('Terraform Plan') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        // First, let's check what files are available
+                        sh 'find . -name "*.tf" -type f'
+                        sh 'ls -la terraform/'
+
+                        // Change to terraform directory (not .terraform subdirectory)
+                        dir('terraform') {
+                            // Initialize Terraform
+                            sh 'terraform init'
+
+                            // Create or select workspace (optional)
+                            sh 'terraform workspace select default || terraform workspace new default'
+
+                            // Plan the deployment
+                            sh """
+                                terraform plan \
+                                -var="image_tag=${env.BUILD_NUMBER}" \
+                                -var="ecr_repo_url=${env.ECR_REPO}" \
+                                -out=tfplan
+                            """
+
+                            // Show the plan
+                            sh 'terraform show tfplan'
+                        }
+                    }
+                }
+            }
+        }
+        stage('Terraform Apply') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        dir('terraform') {
+                            // Apply the planned changes
+                            sh 'terraform apply -auto-approve tfplan'
+
+                            // Optional: Output important information
+                            sh 'terraform output'
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            // Clean up Docker images to save space
+            sh """
+                docker rmi ${env.IMAGE_NAME}:${env.BUILD_NUMBER} || true
+                docker rmi ${env.ECR_REPO}:${env.BUILD_NUMBER} || true
+                docker rmi ${env.ECR_REPO}:latest || true
+            """
+        }
+        failure {
+            echo 'Pipeline failed! Check the logs for details.'
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+    }
+}
