@@ -1,9 +1,11 @@
+# Data sources
 data "aws_availability_zones" "available" {
   state = "available"
 }
 
 data "aws_caller_identity" "current" {}
 
+# VPC
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
@@ -14,6 +16,7 @@ resource "aws_vpc" "main" {
   }
 }
 
+# Internet Gateway
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
@@ -22,32 +25,34 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
+# Public Subnets
 resource "aws_subnet" "public" {
-  count = 2  # Fixed: Added count parameter
+  count = 2
 
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.${count.index + 1}.0/24"
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
 
-  tags = {  # Fixed: Changed from 'tag' to 'tags'
+  tags = {
     Name = "${var.cluster_name}-public-subnet-${count.index + 1}"
   }
 }
 
+# Private Subnets
 resource "aws_subnet" "private" {
-  count = 2  # Fixed: Added count parameter
+  count = 2
 
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.${count.index + 10}.0/24"
   availability_zone = data.aws_availability_zones.available.names[count.index]
-  # Fixed: Removed map_public_ip_on_launch = true (not needed for private subnets)
 
-  tags = {  # Fixed: Changed from 'tag' to 'tags' and corrected naming
+  tags = {
     Name = "${var.cluster_name}-private-subnet-${count.index + 1}"
   }
 }
 
+# Elastic IPs for NAT Gateways
 resource "aws_eip" "nat" {
   count      = 2
   domain     = "vpc"
@@ -58,18 +63,20 @@ resource "aws_eip" "nat" {
   }
 }
 
+# NAT Gateways
 resource "aws_nat_gateway" "main" {
   count         = 2
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
 
-  tags = {  # Fixed: Changed from 'tags {' to 'tags = {'
+  tags = {
     Name = "${var.cluster_name}-nat-${count.index + 1}"
   }
 
   depends_on = [aws_internet_gateway.main]
 }
 
+# Route Tables
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -98,6 +105,7 @@ resource "aws_route_table" "private" {
   }
 }
 
+# Route Table Associations
 resource "aws_route_table_association" "public" {
   count = 2
 
@@ -112,29 +120,7 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private[count.index].id
 }
 
-resource "aws_security_group" "ecs_tasks" {
-  name_prefix = "${var.cluster_name}-ecs-tasks"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    protocol        = "tcp"
-    from_port       = var.container_port
-    to_port         = var.container_port
-    security_groups = [aws_security_group.alb.id]
-  }
-
-  egress {
-    protocol    = "-1"
-    from_port   = 0
-    to_port     = 0
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${var.cluster_name}-ecs-tasks-sg"
-  }
-}
-
+# Security Groups
 resource "aws_security_group" "alb" {
   name_prefix = "${var.cluster_name}-alb"
   vpc_id      = aws_vpc.main.id
@@ -165,6 +151,53 @@ resource "aws_security_group" "alb" {
   }
 }
 
+resource "aws_security_group" "ecs_tasks" {
+  name_prefix = "${var.cluster_name}-ecs-tasks"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    protocol        = "tcp"
+    from_port       = var.container_port
+    to_port         = var.container_port
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    protocol    = "-1"
+    from_port   = 0
+    to_port     = 0
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.cluster_name}-ecs-tasks-sg"
+  }
+}
+
+resource "aws_security_group" "rds" {
+  name_prefix = "${var.cluster_name}-rds"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.ecs_tasks.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${var.cluster_name}-rds-sg"
+  }
+}
+
+# Application Load Balancer
 resource "aws_lb" "main" {
   name               = "${var.cluster_name}-alb"
   internal           = false
@@ -213,156 +246,6 @@ resource "aws_lb_listener" "app" {
   }
 }
 
-resource "aws_iam_role" "ecs_task_execution_role" {
-  name = "${var.cluster_name}-ecsTaskExecutionRole"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
-  role       = aws_iam_role.ecs_task_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-}
-
-resource "aws_iam_role" "ecs_task_role" {
-  name = "${var.cluster_name}-ecsTaskRole"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ecs-tasks.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_cloudwatch_log_group" "app" {
-  name              = "/ecs/${var.cluster_name}"
-  retention_in_days = 30
-
-  tags = {
-    Name = "${var.cluster_name}-log-group"
-  }
-}
-
-resource "aws_ecs_cluster" "main" {
-  name = var.cluster_name
-
-  configuration {
-    execute_command_configuration {
-      logging = "OVERRIDE"
-      log_configuration {
-        cloud_watch_log_group_name = aws_cloudwatch_log_group.app.name
-      }
-    }
-  }
-
-  tags = {
-    Name = var.cluster_name
-  }
-}
-
-resource "aws_ecs_cluster_capacity_providers" "example" {
-  cluster_name = aws_ecs_cluster.main.name
-
-  capacity_providers = ["FARGATE"]
-
-  default_capacity_provider_strategy {
-    base              = 1
-    weight            = 100
-    capacity_provider = "FARGATE"
-  }
-}
-
-resource "aws_ecs_task_definition" "app" {
-  family                   = var.service_name
-  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
-  task_role_arn            = aws_iam_role.ecs_task_role.arn
-  network_mode             = "awsvpc"
-  requires_compatibilities = ["FARGATE"]
-  cpu                      = 512
-  memory                   = 1024
-
-  container_definitions = jsonencode([
-    {
-      name      = var.container_name
-      image     = "${var.ecr_repository_url}:latest"
-      essential = true
-
-      portMappings = [
-        {
-          containerPort = var.container_port
-          protocol      = "tcp"
-        }
-      ]
-
-      logConfiguration = {
-        logDriver = "awslogs"
-        options = {
-          awslogs-group         = aws_cloudwatch_log_group.app.name
-          awslogs-region        = var.aws_region
-          awslogs-stream-prefix = "ecs"
-        }
-      }
-
-      environment = [
-        {
-          name  = "SPRING_PROFILES_ACTIVE"
-          value = "prod"
-        }
-      ]
-    }
-  ])
-
-  tags = {
-    Name = "${var.service_name}-task-definition"
-  }
-}
-
-resource "aws_ecs_service" "app" {
-  name            = var.service_name
-  cluster         = aws_ecs_cluster.main.id
-  task_definition = aws_ecs_task_definition.app.arn
-  desired_count   = var.desired_count
-  launch_type     = "FARGATE"
-
-  network_configuration {
-    security_groups  = [aws_security_group.ecs_tasks.id]
-    subnets          = aws_subnet.private[*].id
-    assign_public_ip = false
-  }
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.app.arn
-    container_name   = var.container_name
-    container_port   = var.container_port
-  }
-
-  depends_on = [aws_lb_listener.app]
-
-  tags = {
-    Name = var.service_name
-  }
-}
-
-# Add this to your existing Terraform configuration
-
 # RDS Subnet Group
 resource "aws_db_subnet_group" "main" {
   name       = "${var.cluster_name}-db-subnet-group"
@@ -370,30 +253,6 @@ resource "aws_db_subnet_group" "main" {
 
   tags = {
     Name = "${var.cluster_name}-db-subnet-group"
-  }
-}
-
-# RDS Security Group
-resource "aws_security_group" "rds" {
-  name_prefix = "${var.cluster_name}-rds"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port       = 3306
-    to_port         = 3306
-    protocol        = "tcp"
-    security_groups = [aws_security_group.ecs_tasks.id]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "${var.cluster_name}-rds-sg"
   }
 }
 
@@ -427,29 +286,95 @@ resource "aws_db_instance" "main" {
   }
 }
 
-# Add variables for RDS
-variable "db_name" {
-  description = "Database name"
-  type        = string
-  default     = "usermanagement"
+# CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/ecs/${var.cluster_name}"
+  retention_in_days = 30
+
+  tags = {
+    Name = "${var.cluster_name}-log-group"
+  }
 }
 
-variable "db_username" {
-  description = "Database username"
-  type        = string
-  default     = "dbadmin"
+# IAM Roles
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "${var.cluster_name}-ecsTaskExecutionRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.cluster_name}-ecs-task-execution-role"
+  }
 }
 
-variable "db_password" {
-  description = "Database password"
-  type        = string
-  sensitive   = true
-  default     = "changeme123!" # Change this to a secure password
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
+  role       = aws_iam_role.ecs_task_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Update your ECS task definition to include database environment variables
-# Replace the existing aws_ecs_task_definition resource with this updated version:
+resource "aws_iam_role" "ecs_task_role" {
+  name = "${var.cluster_name}-ecsTaskRole"
 
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ecs-tasks.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${var.cluster_name}-ecs-task-role"
+  }
+}
+
+# ECS Cluster
+resource "aws_ecs_cluster" "main" {
+  name = var.cluster_name
+
+  configuration {
+    execute_command_configuration {
+      logging = "OVERRIDE"
+      log_configuration {
+        cloud_watch_log_group_name = aws_cloudwatch_log_group.app.name
+      }
+    }
+  }
+
+  tags = {
+    Name = var.cluster_name
+  }
+}
+
+resource "aws_ecs_cluster_capacity_providers" "example" {
+  cluster_name = aws_ecs_cluster.main.name
+
+  capacity_providers = ["FARGATE"]
+
+  default_capacity_provider_strategy {
+    base              = 1
+    weight            = 100
+    capacity_provider = "FARGATE"
+  }
+}
+
+# ECS Task Definition
 resource "aws_ecs_task_definition" "app" {
   family                   = var.service_name
   execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
@@ -462,7 +387,7 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = jsonencode([
     {
       name      = var.container_name
-      image     = "${var.ecr_repository_url}:latest"
+      image     = "${var.ecr_repository_url}:${var.image_tag}"
       essential = true
 
       portMappings = [
@@ -515,17 +440,34 @@ resource "aws_ecs_task_definition" "app" {
   }
 }
 
-# Add RDS outputs
-output "rds_endpoint" {
-  description = "RDS instance endpoint"
-  value       = aws_db_instance.main.endpoint
+# ECS Service
+resource "aws_ecs_service" "app" {
+  name            = var.service_name
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = var.desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    security_groups  = [aws_security_group.ecs_tasks.id]
+    subnets          = aws_subnet.private[*].id
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = var.container_name
+    container_port   = var.container_port
+  }
+
+  depends_on = [aws_lb_listener.app]
+
+  tags = {
+    Name = var.service_name
+  }
 }
 
-output "rds_port" {
-  description = "RDS instance port"
-  value       = aws_db_instance.main.port
-}
-
+# Outputs
 output "cluster_id" {
   description = "ID of the ECS cluster"
   value       = aws_ecs_cluster.main.id
@@ -554,4 +496,29 @@ output "load_balancer_url" {
 output "task_definition_arn" {
   description = "ARN of the task definition"
   value       = aws_ecs_task_definition.app.arn
+}
+
+output "rds_endpoint" {
+  description = "RDS instance endpoint"
+  value       = aws_db_instance.main.endpoint
+}
+
+output "rds_port" {
+  description = "RDS instance port"
+  value       = aws_db_instance.main.port
+}
+
+output "vpc_id" {
+  description = "ID of the VPC"
+  value       = aws_vpc.main.id
+}
+
+output "public_subnet_ids" {
+  description = "IDs of the public subnets"
+  value       = aws_subnet.public[*].id
+}
+
+output "private_subnet_ids" {
+  description = "IDs of the private subnets"
+  value       = aws_subnet.private[*].id
 }

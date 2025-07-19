@@ -1,8 +1,9 @@
 variable "cluster_name" {
-  description = "COP usermanagement deployment"
+  description = "Name of the ECS cluster"
   type        = string
   default     = "usermanagement-cluster"
 }
+
 variable "service_name" {
   description = "Name of the ECS service"
   type        = string
@@ -42,9 +43,26 @@ variable "container_port" {
 variable "image_tag" {
   description = "Docker image tag"
   type        = string
+  default     = "latest"
 }
 
-variable "ecr_repo_url" {
-  description = "ECR repository URL"
+# RDS Variables
+variable "db_name" {
+  description = "Database name"
   type        = string
+  default     = "usermanagement"
+}
+
+variable "db_username" {
+  description = "Database username"
+  type        = string
+  default     = "dbadmin"
+  sensitive   = true
+}
+
+variable "db_password" {
+  description = "Database password"
+  type        = string
+  sensitive   = true
+  # Remove default password for security - should be provided via tfvars or environment
 }
