@@ -61,3 +61,9 @@ variable "image_tag" {
   description = "Docker image tag"
   type        = string
 }
+
+variable "repository_name" {
+  description = "Name of the ECR repository"
+  type        = string
+  default     = "usermanagement"  # or whatever your app name is
+}
