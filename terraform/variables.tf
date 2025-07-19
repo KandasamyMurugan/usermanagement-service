@@ -13,13 +13,19 @@ variable "service_name" {
 variable "container_name" {
   description = "Name of the container"
   type        = string
-  default     = "usermanagementservice"
+  default     = "usermanagement-container"
 }
 
-variable "ecr_repository_url" {
-  description = "ECR repository URL"
-  type        = string
-  default     = "072950892534.dkr.ecr.us-east-1.amazonaws.com/usermanagementservice"
+variable "container_port" {
+  description = "Port exposed by the container"
+  type        = number
+  default     = 8095
+}
+
+variable "desired_count" {
+  description = "Desired number of instances of the task definition"
+  type        = number
+  default     = 1
 }
 
 variable "aws_region" {
@@ -28,25 +34,6 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "desired_count" {
-  description = "Desired number of tasks"
-  type        = number
-  default     = 2
-}
-
-variable "container_port" {
-  description = "Port exposed by the container"
-  type        = number
-  default     = 8080
-}
-
-variable "image_tag" {
-  description = "Docker image tag"
-  type        = string
-  default     = "latest"
-}
-
-# RDS Variables
 variable "db_name" {
   description = "Database name"
   type        = string
@@ -56,13 +43,21 @@ variable "db_name" {
 variable "db_username" {
   description = "Database username"
   type        = string
-  default     = "dbadmin"
-  sensitive   = true
+  default     = "admin"
 }
 
 variable "db_password" {
   description = "Database password"
   type        = string
   sensitive   = true
-  # Remove default password for security - should be provided via tfvars or environment
+}
+
+variable "ecr_repository_url" {
+  description = "ECR repository URL"
+  type        = string
+}
+
+variable "image_tag" {
+  description = "Docker image tag"
+  type        = string
 }
