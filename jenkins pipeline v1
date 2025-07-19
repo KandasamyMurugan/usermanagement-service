@@ -1,0 +1,62 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        IMAGE_NAME = 'usermanagementservice'
+        ECR_ACCOUNT_ID = '072950892534'  // <-- Replace with your AWS Account ID
+        ECR_REPO = "${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_NAME}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: '*/feature-kanda']],
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/KandasamyMurugan/usermanagement-service.git',
+                        credentialsId: 'b2cac38d-0784-46b2-8c06-49ab546103f8'
+                    ]]
+                ])
+            }
+        }
+
+        stage('Build App') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def imageTag = "${env.BUILD_NUMBER}"
+                    def fullImageName = "${env.IMAGE_NAME}:${imageTag}"
+                    def ecrImage = "${env.ECR_REPO}:${imageTag}"
+
+                    // Build Docker image
+                    sh "docker build -t ${fullImageName} ."
+
+                    // Tag for ECR
+                    sh "docker tag ${fullImageName} ${ecrImage}"
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                         sh 'aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 072950892534.dkr.ecr.us-east-1.amazonaws.com'
+                         def imageTag = "${env.BUILD_NUMBER}"
+                         def ecrImage = "${env.ECR_REPO}:${imageTag}"
+                         sh "docker push ${ecrImage}"
+                         sh "docker tag ${ecrImage} ${env.ECR_REPO}:latest"
+                         sh "docker push ${env.ECR_REPO}:latest"
+                    }
+                }
+            }
+        }
+    }
+}
