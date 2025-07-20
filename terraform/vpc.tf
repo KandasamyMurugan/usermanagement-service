@@ -308,7 +308,7 @@ resource "aws_db_subnet_group" "main" {
 
 # RDS Instance
 resource "aws_db_instance" "main" {
-  identifier             = "${var.cluster_name}-mysql"
+  identifier             = var.db_name
   engine                 = "mysql"
   engine_version         = "8.0"
   instance_class         = "db.t3.micro"
