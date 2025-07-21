@@ -1,0 +1,203 @@
+pipeline {
+    agent any
+    environment {
+        AWS_DEFAULT_REGION = 'us-east-1'
+        IMAGE_NAME = 'nagendren/usermanagement-microservice'
+        ECR_ACCOUNT_ID = '072950892534'
+        ECR_REPO = "${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_NAME}"
+        TF_VAR_image_tag = "${env.BUILD_NUMBER}"
+        TF_VAR_ecr_repository_url = "${ECR_REPO}"
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/feature-kanda']],
+                        userRemoteConfigs: [[
+                                                    url: 'https://github.com/KandasamyMurugan/usermanagement-service.git',
+                                                    credentialsId: 'b2cac38d-0784-46b2-8c06-49ab546103f8'
+                                            ]]
+                ])
+            }
+        }
+
+        stage('Build App') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        //Creating ECR Repo
+        stage('Setup Infrastructure - ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        dir('terraform') {
+                            sh 'terraform init'
+                            sh 'terraform workspace select default || terraform workspace new default'
+
+                            // Applying ECR resources
+                            sh """
+                                terraform apply -auto-approve \
+                                -target=aws_ecr_repository.app \
+                                -target=aws_ecr_lifecycle_policy.app \
+                                -var="image_tag=${env.BUILD_NUMBER}" \
+                                -var="ecr_repository_url=${env.ECR_REPO}"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def imageTag = "${env.BUILD_NUMBER}"
+                    def fullImageName = "${env.IMAGE_NAME}:${imageTag}"
+                    def ecrImage = "${env.ECR_REPO}:${imageTag}"
+
+                    echo "Building image: ${fullImageName}"
+                    echo "ECR target: ${ecrImage}"
+
+                    //Building Docker image
+                    sh "docker build -t ${fullImageName} ."
+                    //Tagging for ECR
+                    sh "docker tag ${fullImageName} ${ecrImage}"
+                }
+            }
+        }
+
+        stage('Push to ECR') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        sh "aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+
+                        def imageTag = "${env.BUILD_NUMBER}"
+                        def ecrImage = "${env.ECR_REPO}:${imageTag}"
+
+                        echo "Pushing image: ${ecrImage}"
+                        sh "docker push ${ecrImage}"
+                        sh "docker tag ${ecrImage} ${env.ECR_REPO}:latest"
+                        sh "docker push ${env.ECR_REPO}:latest"
+                        echo "Successfully pushed ${ecrImage} and ${env.ECR_REPO}:latest"
+                    }
+                }
+            }
+        }
+
+        stage('Verify ECR Image') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        // Verifing the image exists in ECR
+                        sh """
+                            aws ecr describe-images \
+                            --repository-name ${IMAGE_NAME} \
+                            --image-ids imageTag=${env.BUILD_NUMBER} \
+                            --region ${AWS_DEFAULT_REGION}
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Destroy Previous') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        dir('terraform') {
+                            // Only destroy ECS/infrastructure, keep ECR
+                            sh """
+                                terraform destroy -auto-approve \
+                                -target=aws_ecs_service.app \
+                                -target=aws_ecs_task_definition.app \
+                                -target=aws_ecs_cluster.main \
+                                -target=aws_lb.main \
+                                -target=aws_lb_target_group.app \
+                                -target=aws_lb_listener.app \
+                                -var="image_tag=${env.BUILD_NUMBER}" \
+                                -var="ecr_repository_url=${env.ECR_REPO}" || echo "No existing infrastructure to destroy - continuing..."
+                            """
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        dir('terraform') {
+                            sh """
+                                terraform plan \
+                                -var="image_tag=${env.BUILD_NUMBER}" \
+                                -var="ecr_repository_url=${env.ECR_REPO}" \
+                                -out=tfplan
+                            """
+
+                            sh 'terraform show tfplan'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        dir('terraform') {
+                            sh 'terraform apply -auto-approve tfplan'
+                            sh 'terraform output'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Wait for Service Stability') {
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-ecr-credentials']]) {
+                    script {
+                        dir('terraform') {
+                            // Wait for ECS service to become stable
+                            sh """
+                                echo "Waiting for ECS service to stabilize..."
+                                aws ecs wait services-stable \
+                                --cluster \$(terraform output -raw cluster_id) \
+                                --services \$(terraform output -raw service_name) \
+                                --region ${AWS_DEFAULT_REGION} || echo "Service stability check failed or timed out"
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            sh """
+                docker rmi ${env.IMAGE_NAME}:${env.BUILD_NUMBER} || true
+                docker rmi ${env.ECR_REPO}:${env.BUILD_NUMBER} || true
+                docker rmi ${env.ECR_REPO}:latest || true
+            """
+        }
+        failure {
+            echo 'Pipeline failed! Check the logs for details.'
+        }
+        success {
+            echo 'Pipeline completed successfully!'
+            script {
+                dir('terraform') {
+                    // Display useful information
+                    echo "Image pushed: ${env.ECR_REPO}:${env.BUILD_NUMBER}"
+                    sh 'echo "Load Balancer URL: $(terraform output -raw load_balancer_url)"'
+                }
+            }
+        }
+    }
+}
