@@ -1,5 +1,5 @@
 # Database configuration
-db_password = "dbpassword11"
+db_password = "dbpassword1"
 db_name = "usermanagement"
 db_username = "admin"
 
