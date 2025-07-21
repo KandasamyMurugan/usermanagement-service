@@ -210,6 +210,42 @@ resource "aws_ecr_repository" "app" {
   }
 }
 
+# ECR Lifecycle Policy - ADDED TO FIX JENKINS PIPELINE
+resource "aws_ecr_lifecycle_policy" "app" {
+  repository = aws_ecr_repository.app.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Keep last 30 images"
+        selection = {
+          tagStatus     = "tagged"
+          tagPrefixList = ["v"]
+          countType     = "imageCountMoreThan"
+          countNumber   = 30
+        }
+        action = {
+          type = "expire"
+        }
+      },
+      {
+        rulePriority = 2
+        description  = "Delete untagged images"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
+        }
+        action = {
+          type = "expire"
+        }
+      }
+    ]
+  })
+}
+
 # Application Load Balancer
 resource "aws_lb" "main" {
   name               = "${var.cluster_name}-alb"
@@ -269,7 +305,7 @@ resource "aws_db_subnet_group" "main" {
   }
 }
 
-# RDS Instance
+# RDS Instance - FIXED USERNAME ATTRIBUTE
 resource "aws_db_instance" "main" {
   identifier             = var.db_name
   engine                 = "mysql"
@@ -281,7 +317,7 @@ resource "aws_db_instance" "main" {
   storage_encrypted      = true
 
   db_name  = var.db_name
-  AWS_RDS_USERNAME = var.AWS_RDS_USERNAME
+  username = var.AWS_RDS_USERNAME  # FIXED: Changed from AWS_RDS_USERNAME to username
   password = var.AWS_RDS_PASSWORD
 
   vpc_security_group_ids = [aws_security_group.rds.id]
