@@ -1,7 +1,7 @@
 # Database configuration
-db_password = "dbpassword1"
+AWS_RDS_PASSWORD = "redhat"
 db_name = "usermanagement"
-db_username = "admin"
+AWS_RDS_USERNAME = "root"
 
 # ECS configuration
 cluster_name = "usermanagement-cluster"

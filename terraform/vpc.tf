@@ -1,4 +1,3 @@
-# Data sources
 data "aws_availability_zones" "available" {
   state = "available"
 }
@@ -211,42 +210,6 @@ resource "aws_ecr_repository" "app" {
   }
 }
 
-# ECR Lifecycle Policy (optional - to manage image cleanup)
-resource "aws_ecr_lifecycle_policy" "app" {
-  repository = aws_ecr_repository.app.name
-
-  policy = jsonencode({
-    rules = [
-      {
-        rulePriority = 1
-        description  = "Keep last 10 images"
-        selection = {
-          tagStatus     = "tagged"
-          tagPrefixList = ["v"]
-          countType     = "imageCountMoreThan"
-          countNumber   = 10
-        }
-        action = {
-          type = "expire"
-        }
-      },
-      {
-        rulePriority = 2
-        description  = "Delete untagged images older than 1 day"
-        selection = {
-          tagStatus   = "untagged"
-          countType   = "sinceImagePushed"
-          countUnit   = "days"
-          countNumber = 1
-        }
-        action = {
-          type = "expire"
-        }
-      }
-    ]
-  })
-}
-
 # Application Load Balancer
 resource "aws_lb" "main" {
   name               = "${var.cluster_name}-alb"
@@ -318,8 +281,8 @@ resource "aws_db_instance" "main" {
   storage_encrypted      = true
 
   db_name  = var.db_name
-  username = var.db_username
-  password = var.db_password
+  AWS_RDS_USERNAME = var.AWS_RDS_USERNAME
+  password = var.AWS_RDS_PASSWORD
 
   vpc_security_group_ids = [aws_security_group.rds.id]
   db_subnet_group_name   = aws_db_subnet_group.main.name
@@ -476,11 +439,11 @@ resource "aws_ecs_task_definition" "app" {
         },
         {
           name  = "AWS_RDS_USERNAME"
-          value = var.db_username
+          value = var.AWS_RDS_USERNAME
         },
         {
           name  = "AWS_RDS_PASSWORD"
-          value = var.db_password
+          value = var.AWS_RDS_PASSWORD
         }
       ]
     }

@@ -58,18 +58,16 @@ variable "ecr_repository_url" {
 variable "db_name" {
   description = "Database name"
   type        = string
-  default     = "webappdb"
+  default     = "usermanagement"
 }
 
-variable "db_username" {
+variable "AWS_RDS_USERNAME" {
   description = "Database username"
   type        = string
-  default     = "root"
-}
+  }
 
-variable "db_password" {
+variable "AWS_RDS_PASSWORD" {
   description = "Database password"
   type        = string
-  default     = "dbpassword11"
   sensitive   = true
 }
