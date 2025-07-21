@@ -59,7 +59,7 @@ public class UserController {
                         String.format("User with user name %s doesn't exist!", userName)));
     }
 
-    @PostMapping("/user")
+    @PostMapping("usermgmt/user")
     @ResponseStatus(HttpStatus.OK)
     public void createUser(@RequestBody @Valid User user) {
 
