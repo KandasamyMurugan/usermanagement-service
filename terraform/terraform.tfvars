@@ -1,5 +1,5 @@
 # Database configuration
-AWS_RDS_PASSWORD = "redhat"
+AWS_RDS_PASSWORD = "redhat$8636"
 db_name = "usermanagement"
 AWS_RDS_USERNAME = "root"
 
